@@ -885,7 +885,7 @@ struct npc_xt_toy_pile : public ScriptedAI
         if (roll_chance_i(30))
             DoCastSelf(SPELL_RECHARGE_PUMMELER, true);
 
-        uint8 const summonCount = urand(5, 7);
+        uint8 const summonCount = urand(1, 3);
         for (uint8 i = 0; i < summonCount; ++i)
             DoCastSelf(SPELL_RECHARGE_SCRAPBOT, true);
 

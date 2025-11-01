@@ -550,7 +550,7 @@ struct boss_razorscale : public BossAI
                     if (Unit* victim = me->GetVictim())
                         if (!victim->HasAura(SPELL_FUSED_ARMOR))
                             DoCast(victim, SPELL_FUSE_ARMOR);
-                    events.Repeat(12s);
+                    events.Repeat(120s);
                     break;
                 case EVENT_RESUME_CHASE:
                     me->SetCombatMovement(true);
