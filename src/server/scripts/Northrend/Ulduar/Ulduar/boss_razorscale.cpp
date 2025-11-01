@@ -514,7 +514,7 @@ struct boss_razorscale : public BossAI
                         if (Aura* aur = victim->GetAura(SPELL_FUSEARMOR))
                             if (aur->GetStackAmount() == 5)
                                 victim->CastSpell(victim, SPELL_FUSED_ARMOR, true);
-                        events.Repeat(10s);
+                    	events.Repeat(120s);
                         break;
                     }
                 events.Repeat(2s);

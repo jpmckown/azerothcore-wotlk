@@ -686,7 +686,8 @@ struct boss_algalon_the_observer : public ScriptedAI
                 events.Repeat(3s, 4500ms);
                 break;
             case EVENT_PHASE_PUNCH:
-                me->CastSpell(me->GetVictim(), SPELL_PHASE_PUNCH, false);
+                    // TODO: No Phase Punch
+                    // me->CastSpell(me->GetVictim(), SPELL_PHASE_PUNCH, false);
                 events.Repeat(15s + 500ms);
                 break;
             case EVENT_SUMMON_COLLAPSING_STAR:
@@ -703,12 +704,13 @@ struct boss_algalon_the_observer : public ScriptedAI
                 break;
             case EVENT_ACTIVATE_LIVING_CONSTELLATION:
                 {
-                    if (events.GetPhaseMask() & PHASE_MASK_NO_UPDATE)
-                    {
-                        events.Repeat(4s);
-                        break;
-                    }
-                    CallConstellations();
+                    // TODO: No constellations
+                    // if (events.GetPhaseMask() & PHASE_MASK_NO_UPDATE)
+                    // {
+                    //     events.Repeat(4s);
+                    //     break;
+                    // }
+                    // CallConstellations();
                     //me->CastSpell(me, SPELL_TRIGGER_3_ADDS, true);
                     events.Repeat(50s);
                     break;

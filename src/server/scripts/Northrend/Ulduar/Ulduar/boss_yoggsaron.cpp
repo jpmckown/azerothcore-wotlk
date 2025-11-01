@@ -745,9 +745,13 @@ struct boss_yoggsaron_sara : public ScriptedAI
 
         if (!SelectTargetFromPlayerList(90, SPELL_INSANE1))
         {
-            _instance->DoRemoveAurasDueToSpellOnPlayers(SPELL_INSANE1);
-            EnterEvadeMode(EVADE_REASON_OTHER);
-            return;
+                // also check players are not in brain area
+                Creature* yoggb = ObjectAccessor::GetCreature(*me, me->GetInstanceScript()->GetGuidData(NPC_BRAIN_OF_YOGG_SARON));
+                if (!yoggb->SelectNearestTarget(200, true)) {
+            		_instance->DoRemoveAurasDueToSpellOnPlayers(SPELL_INSANE1);
+                	EnterEvadeMode(EVADE_REASON_OTHER);
+                	return;
+                }
         }
 
         if (_p2TalkTimer)
@@ -1763,8 +1767,9 @@ struct boss_yoggsaron_immortal_guardian : public ScriptedAI
 
     void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
     {
-        if (damage >= me->GetHealth())
-            damage = me->GetHealth() - 1;
+            // TODO: IF IT BLEEDS, WE CAN KILL IT
+            // if (damage >= me->GetHealth())
+            //     damage = me->GetHealth() - 1;
     }
 
     void SpellHit(Unit* caster, SpellInfo const* spellInfo) override

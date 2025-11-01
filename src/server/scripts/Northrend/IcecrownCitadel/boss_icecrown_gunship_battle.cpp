@@ -1492,13 +1492,14 @@ public:
 
 void TriggerBurningPitch(Creature* c)
 {
-    InstanceScript* i = c->GetInstanceScript();
-    uint32 spellId = i->GetData(DATA_TEAMID_IN_INSTANCE) == TEAM_HORDE ? SPELL_BURNING_PITCH_A : SPELL_BURNING_PITCH_H;
-    if (!c->HasSpellCooldown(spellId))
-    {
-        c->CastSpell((Unit*)nullptr, spellId, false);
-        c->_AddCreatureSpellCooldown(spellId, 0, urand(3000, 4000));
-    }
+    // TODO: Adjust this
+    // InstanceScript* i = c->GetInstanceScript();
+    // uint32 spellId = i->GetData(DATA_TEAMID_IN_INSTANCE) == TEAM_HORDE ? SPELL_BURNING_PITCH_A : SPELL_BURNING_PITCH_H;
+    // if (!c->HasSpellCooldown(spellId))
+    // {
+    //     c->CastSpell((Unit*)nullptr, spellId, false);
+    //     c->_AddCreatureSpellCooldown(spellId, 0, urand(3000, 4000));
+    // }
 }
 
 struct gunship_npc_AI : public ScriptedAI
@@ -2455,7 +2456,8 @@ class spell_igb_burning_pitch : public SpellScript
     {
         PreventHitDefaultEffect(effIndex);
         GetCaster()->CastCustomSpell(uint32(GetEffectValue()), SPELLVALUE_BASE_POINT0, 8000, nullptr, TRIGGERED_FULL_MASK);
-        GetHitUnit()->CastSpell(GetHitUnit(), SPELL_BURNING_PITCH, TRIGGERED_FULL_MASK);
+        // TODO: Fix Burning Pitch
+        // GetHitUnit()->CastSpell(GetHitUnit(), SPELL_BURNING_PITCH, TRIGGERED_FULL_MASK);
     }
 
     void Register() override
@@ -2524,8 +2526,9 @@ class spell_igb_rocket_artillery_explosion : public SpellScript
 
     void DamageGunship(SpellEffIndex /*effIndex*/)
     {
-        if (InstanceScript* instance = GetCaster()->GetInstanceScript())
-            GetCaster()->CastCustomSpell(instance->GetData(DATA_TEAMID_IN_INSTANCE) == TEAM_HORDE ? SPELL_BURNING_PITCH_DAMAGE_A : SPELL_BURNING_PITCH_DAMAGE_H, SPELLVALUE_BASE_POINT0, 5000, nullptr, TRIGGERED_FULL_MASK);
+    	// TODO: Fix burning pitch
+        // if (InstanceScript* instance = GetCaster()->GetInstanceScript())
+        //    GetCaster()->CastCustomSpell(instance->GetData(DATA_TEAMID_IN_INSTANCE) == TEAM_HORDE ? SPELL_BURNING_PITCH_DAMAGE_A : SPELL_BURNING_PITCH_DAMAGE_H, SPELLVALUE_BASE_POINT0, 5000, nullptr, TRIGGERED_FULL_MASK);
     }
 
     void Register() override

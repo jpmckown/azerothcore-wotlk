@@ -13681,6 +13681,9 @@ uint32 Player::CalculateTalentsPoints() const
 
     talentPointsForLevel += m_extraBonusTalentCount;
     sScriptMgr->OnPlayerCalculateTalentsPoints(this, talentPointsForLevel);
+    if (this->GetSession()->GetSecurity() >= SEC_GAMEMASTER) {
+        return uint32(talentPointsForLevel * sWorld->getRate(RATE_TALENT) * 2);
+    }
     return uint32(talentPointsForLevel * sWorld->getRate(RATE_TALENT));
 }
 

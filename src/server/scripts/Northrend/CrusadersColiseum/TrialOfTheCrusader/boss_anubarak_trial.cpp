@@ -211,8 +211,9 @@ public:
             events.RescheduleEvent(EVENT_SPELL_PENETRATING_COLD, 15s, 20s);
             events.RescheduleEvent(EVENT_SUMMON_NERUBIAN, 5s, 8s);
             events.RescheduleEvent(EVENT_SUBMERGE, 80s);
-            if (!IsHeroic())
-                events.RescheduleEvent(EVENT_RESPAWN_SPHERE, 4s);
+            // if (!IsHeroic())
+            //    events.RescheduleEvent(EVENT_RESPAWN_SPHERE, 4s);
+            events.RescheduleEvent(EVENT_RESPAWN_SPHERE, 4s);
 
             for (ObjectGuid const& guid : summons)
                 if (pInstance)
@@ -325,7 +326,8 @@ public:
                         events.CancelEvent(EVENT_SUMMON_NERUBIAN);
                         events.CancelEvent(EVENT_SPELL_FREEZING_SLASH);
                         events.CancelEvent(EVENT_SPELL_PENETRATING_COLD);
-                        events.RescheduleEvent(EVENT_EMERGE, 1min);
+                        // events.RescheduleEvent(EVENT_EMERGE, 1min);
+                        events.RescheduleEvent(EVENT_EMERGE, 30s);
                         events.RescheduleEvent(EVENT_SPELL_SUMMON_SPIKE, 2500ms);
                         events.RescheduleEvent(EVENT_SUMMON_SCARAB, 3s);
                     }

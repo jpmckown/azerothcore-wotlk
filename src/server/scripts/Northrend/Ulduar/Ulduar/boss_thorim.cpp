@@ -664,12 +664,15 @@ struct boss_thorim : public BossAI
                 break;
             case EVENT_THORIM_LIGHTNING_ORB:
                 {
-                    if (GetArenaPlayer())
-                    {
+                    // TODO: Better logic here
+                    // if (GetArenaPlayer())
+                    // {
                         // Player found, repeat and return
-                        events.Repeat(5s);
-                        return;
-                    }
+                    //     events.Repeat(5s);
+                    //     return;
+                    // }
+                    events.Repeat(5s);
+                    return;
 
                     // No players found
                     Talk(SAY_WIPE);
@@ -686,19 +689,19 @@ struct boss_thorim : public BossAI
                 me->SummonCreature(NPC_LIGHTNING_ORB, me->GetPositionX(), me->GetPositionY(), me->GetPositionZ());
                 break;
             case EVENT_THORIM_ARENA_SPAWN_WARBRINGER:
-                SpawnAnArenaNPC(NPC_DARK_RUNE_WARBRINGER);
+                // SpawnAnArenaNPC(NPC_DARK_RUNE_WARBRINGER);
                 events.Repeat(15s);
                 break;
             case EVENT_THORIM_ARENA_SPAWN_EVOKER:
-                SpawnAnArenaNPC(NPC_DARK_RUNE_EVOKER);
+				// SpawnAnArenaNPC(NPC_DARK_RUNE_EVOKER);
                 events.Repeat(20s);
                 break;
             case EVENT_THORIM_ARENA_SPAWN_COMMONER:
-                SpawnCommoners();
+				// SpawnCommoners();
                 events.Repeat(21s);
                 break;
             case EVENT_THORIM_ARENA_SPAWN_CHAMPION:
-                SpawnAnArenaNPC(NPC_DARK_RUNE_CHAMPION);
+				// SpawnAnArenaNPC(NPC_DARK_RUNE_CHAMPION);
                 events.Repeat(25s);
                 break;
             case EVENT_THORIM_UNBALANCING_STRIKE:

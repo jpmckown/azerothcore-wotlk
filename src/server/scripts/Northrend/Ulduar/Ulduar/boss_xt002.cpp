@@ -465,8 +465,8 @@ struct npc_xt002_heart : public PassiveAI
                     _spawnSelection++;
                     break;
                 case 2:
-                    for (uint8 i = 0; i < 5; ++i)
-                        me->SummonCreature(NPC_XS013_SCRAPBOT, target->GetPositionX() + irand(-3, 3), target->GetPositionY() + irand(-3, 3), target->GetPositionZ() + 2, 0, TEMPSUMMON_CORPSE_TIMED_DESPAWN, 1000);
+                	// for (uint8 i = 0; i < 5; ++i)
+                	//     me->SummonCreature(NPC_XS013_SCRAPBOT, target->GetPositionX() + irand(-3, 3), target->GetPositionY() + irand(-3, 3), target->GetPositionZ() + 2, 0, TEMPSUMMON_CORPSE_TIMED_DESPAWN, 1000);
                     _spawnSelection++;
                     break;
                 case 3:
@@ -477,8 +477,8 @@ struct npc_xt002_heart : public PassiveAI
                     _spawnSelection++;
                     break;
                 case 4:
-                    for (uint8 i = 0; i < 5; ++i)
-                        me->SummonCreature(NPC_XS013_SCRAPBOT, target->GetPositionX() + irand(-3, 3), target->GetPositionY() + irand(-3, 3), target->GetPositionZ() + 2, 0, TEMPSUMMON_CORPSE_TIMED_DESPAWN, 1000);
+                	// for (uint8 i = 0; i < 5; ++i)
+                    //     me->SummonCreature(NPC_XS013_SCRAPBOT, target->GetPositionX() + irand(-3, 3), target->GetPositionY() + irand(-3, 3), target->GetPositionZ() + 2, 0, TEMPSUMMON_CORPSE_TIMED_DESPAWN, 1000);
                     _spawnSelection = 0;
                     break;
             }
