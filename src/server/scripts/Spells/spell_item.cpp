@@ -6071,6 +6071,27 @@ class spell_item_living_root_of_the_wildheart : public AuraScript
     }
 };
 
+// 500007 - Flask of Purity, 500009 - Flask of Sacred Purity, 500012 - Flask of Hallowed Purity (custom)
+// Can't be drunk in a battleground, an arena or Wintergrasp during a battle; an active flask goes dormant there
+// (Unit::IsImmunedToDispellableDebuff)
+class spell_item_flask_of_purity : public SpellScript
+{
+    PrepareSpellScript(spell_item_flask_of_purity);
+
+    SpellCastResult CheckCast()
+    {
+        if (GetCaster()->IsInPvPCombatArea())
+            return SPELL_FAILED_NOT_HERE;
+
+        return SPELL_CAST_OK;
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(spell_item_flask_of_purity::CheckCast);
+    }
+};
+
 void AddSC_item_spell_scripts()
 {
     RegisterSpellScript(spell_item_massive_seaforium_charge);
@@ -6251,4 +6272,5 @@ void AddSC_item_spell_scripts()
     RegisterSpellScript(spell_item_purified_shard_of_the_scale);
     RegisterSpellScript(spell_item_shiny_shard_of_the_scale);
     RegisterSpellScript(spell_item_living_root_of_the_wildheart);
+    RegisterSpellScript(spell_item_flask_of_purity);
 }

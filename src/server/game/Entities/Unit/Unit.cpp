@@ -9867,6 +9867,10 @@ bool Unit::IsImmunedToSpellEffect(SpellInfo const* spellInfo, uint32 index, Worl
     if (spellInfo->HasAttribute(SPELL_ATTR0_NO_IMMUNITIES) && !HasSpiritOfRedemptionAura())
         return false;
 
+    // custom: harmful magic, curse, disease and poison auras don't land; the spell's other effects (damage) still do
+    if (IsImmunedToDispellableDebuff(spellInfo, index, caster))
+        return true;
+
     // Special-case handling for Vezax's Aura of Despair.
     static constexpr uint32 SPELL_AURA_OF_DESPAIR_1 = 62692;
     static constexpr uint32 SPELL_AURA_OF_DESPAIR_2 = 64848;
@@ -9917,6 +9921,39 @@ bool Unit::IsImmunedToSpellEffect(SpellInfo const* spellInfo, uint32 index, Worl
             }
         }
     }
+
+    return false;
+}
+
+// custom (Flask of Purity 500007, 500009, 500012): SPELL_AURA_DISPEL_IMMUNITY with DISPEL_ALL makes the unit immune to the
+// harmful auras of magic, curse, disease and poison spells. Stock dispel immunity matches one Dispel type and blocks the
+// whole spell, buffs too; no stock spell uses DISPEL_ALL. A spell made only of such auras is immune as a whole through
+// IsImmunedToSpell. Dormant in PvP areas: the aura stays on and works again outside.
+bool Unit::IsImmunedToDispellableDebuff(SpellInfo const* spellInfo, uint32 index, WorldObject const* caster) const
+{
+    if (!spellInfo->Effects[index].IsAura() || !(spellInfo->GetDispelMask() & DISPEL_ALL_MASK))
+        return false;
+
+    if (caster == this || spellInfo->IsPositiveEffect(index))
+        return false;
+
+    if (!m_spellImmune[IMMUNITY_DISPEL].count(DISPEL_ALL))
+        return false;
+
+    return !IsInPvPCombatArea();
+}
+
+// custom: battlegrounds, arenas and battlefields (Wintergrasp) while a battle is running
+bool Unit::IsInPvPCombatArea() const
+{
+    if (!IsInWorld())
+        return false;
+
+    if (GetMap()->IsBattlegroundOrArena())
+        return true;
+
+    if (Battlefield* battlefield = sBattlefieldMgr->GetBattlefieldToZoneId(GetZoneId()))
+        return battlefield->IsWarTime();
 
     return false;
 }
