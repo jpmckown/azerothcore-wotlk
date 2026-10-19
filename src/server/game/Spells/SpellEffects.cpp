@@ -3722,11 +3722,6 @@ void Spell::EffectWeaponDmg(SpellEffIndex effIndex)
                         AddPct(disease_amt, aurEff->GetAmount());
 
                     AddPct(totalDamagePercentMod, disease_amt * unitTarget->GetDiseasesByCaster(unitCaster->GetGUID()) / 2.0f);
-
-                    // Glyph of Blood Strike
-                    if (unitCaster->GetAuraEffect(59332, EFFECT_0))
-                        if (unitTarget->HasDecreaseSpeedAura())
-                            AddPct(totalDamagePercentMod, 20.0f);
                     break;
                 }
                 // Death Strike
@@ -3738,28 +3733,13 @@ void Spell::EffectWeaponDmg(SpellEffIndex effIndex)
                             AddPct(totalDamagePercentMod, runic);
                     break;
                 }
-                // Obliterate (12.5% more damage per disease)
+                // Obliterate (Death Knight rebalance, custom): no disease bonus or consumption; Annihilation adds
+                // damage against targets that count as frozen
                 if (m_spellInfo->SpellFamilyFlags[1] & 0x20000)
                 {
-                    bool consumeDiseases = true;
-                    // Annihilation
-                    if (AuraEffect const* aurEff = unitCaster->GetDummyAuraEffect(SPELLFAMILY_DEATHKNIGHT, 2710, EFFECT_0))
-                        // Do not consume diseases if roll sucesses
-                        if (roll_chance_i(aurEff->GetAmount()))
-                            consumeDiseases = false;
-
-                    float disease_amt = m_spellInfo->Effects[EFFECT_2].CalcValue();
-                    //Death Knight T8 Melee 4P Bonus
-                    if (AuraEffect* aurEff = unitCaster->GetAuraEffectDummy(64736))
-                        AddPct(disease_amt, aurEff->GetAmount());
-
-                    AddPct(totalDamagePercentMod, disease_amt * unitTarget->GetDiseasesByCaster(unitCaster->GetGUID(), consumeDiseases) / 2.0f);
-                    break;
-                }
-                // Blood-Caked Strike - Blood-Caked Blade
-                if (m_spellInfo->SpellIconID == 1736)
-                {
-                    AddPct(totalDamagePercentMod, unitTarget->GetDiseasesByCaster(unitCaster->GetGUID()) * 50.0f);
+                    if (AuraEffect const* annihilation = unitCaster->GetDummyAuraEffect(SPELLFAMILY_DEATHKNIGHT, 2710, EFFECT_0))
+                        if (unitTarget->CountsAsFrozenForDeathKnight(unitCaster))
+                            AddPct(totalDamagePercentMod, annihilation->GetAmount());
                     break;
                 }
                 // Heart Strike

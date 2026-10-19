@@ -16,6 +16,10 @@
  */
 
 #include "AreaDefines.h"
+#include "CellImpl.h"
+#include "GameTime.h"
+#include "GridNotifiers.h"
+#include "GridNotifiersImpl.h"
 #include "PetDefines.h"
 #include "Player.h"
 #include "SpellAuraEffects.h"
@@ -25,6 +29,9 @@
 #include "SpellScriptLoader.h"
 #include "Totem.h"
 #include "UnitAI.h"
+#include <algorithm>
+#include <deque>
+
 /*
  * Scripts for spells with SPELLFAMILY_DEATHKNIGHT and SPELLFAMILY_GENERIC spells used by deathknight players.
  * Ordered alphabetically using scriptname.
@@ -107,6 +114,42 @@ enum DeathKnightSpells
     SPELL_DK_RUNE_STRIKE_OFF_HAND_R1             = 66217,
     SPELL_DK_BLOOD_STRIKE_OFF_HAND_R1            = 66215,
     SPELL_DK_KILLING_MACHINE                     = 51124,
+    // Death Knight rebalance (custom, .agents/plans/dk-rebalance)
+    SPELL_DK_IMPROVED_DEATH_STRIKE_R1            = 62905,
+    SPELL_DK_RUNE_STRIKE                         = 56815,
+    SPELL_DK_LINGERING_ROT                       = 600010,
+    SPELL_DK_CONTAGION_R1                        = 600011,
+    SPELL_DK_ROTTING_PLAGUE_TALENT               = 600013,
+    SPELL_DK_ROTTING_PLAGUE                      = 600014,
+    SPELL_DK_VIRULENT_SURGE                      = 600015,
+    SPELL_DK_PLAGUE_SWARM_DAMAGE                 = 600021,
+    SPELL_DK_SANGUINE_BULWARK                    = 600041,
+    SPELL_DK_VAMPIRIC_FRENZY                     = 600040,
+    SPELL_DK_CRIMSON_CHARGE                      = 600050,
+    SPELL_DK_BLOOD_SHIELD                        = 600051,
+    SPELL_DK_RUNE_STRIKE_HEAL                    = 600053,
+    SPELL_DK_SANGUINE_HUNGER_HEAL                = 600062,
+    SPELL_DK_HEART_STRIKE_OFF_HAND_R1            = 600070,
+    SPELL_DK_GLYPH_OF_BLOOD_STRIKE               = 59332,  // Threat of Thassarian also covers Heart Strike
+    SPELL_DK_GLYPH_OF_UNQUENCHABLE_THIRST        = 58618,  // was Glyph of Strangulate
+};
+
+enum DeathKnightRebalance
+{
+    DK_DISEASE_EXTENSION_STEP                    = 3000,  // Scourge Strike extends diseases by this much
+    DK_DISEASE_EXTENSION_MAX                     = 9000,  // up to this much in total
+    DK_DISEASE_EXTENSION_MAX_GLYPHED             = 15000, // with Glyph of Scourge Strike
+    DK_DEATH_STRIKE_DAMAGE_WINDOW                = 5000,  // Improved Death Strike looks at damage taken this long ago
+    DK_DEATH_STRIKE_DAMAGE_PCT_PER_RANK          = 15,
+    DK_BLOOD_SHIELD_PCT                          = 50,    // of Death Strike overheal
+    DK_BLOOD_SHIELD_MAX_HEALTH_PCT               = 20,    // cap, of maximum health
+    DK_SANGUINE_BULWARK_SHIELD_BONUS_PCT         = 50,
+    DK_RUNE_STRIKE_HEAL_PCT                      = 10,
+    DK_CONTAGION_RANGE                           = 10,
+    DK_PLAGUE_SWARM_BONUS_PER_STACK_PCT          = 15,
+    DK_UNHOLY_BLIGHT_AP_PCT                      = 25,
+    DK_UNQUENCHABLE_THIRST_MAX_STACKS            = 5,
+    DK_UNQUENCHABLE_THIRST_MAX_STACKS_GLYPHED    = 7,     // the buffs' StackAmount
 };
 
 enum DeathKnightSpellIcons
@@ -117,7 +160,8 @@ enum DeathKnightSpellIcons
     DK_ICON_ID_NECROSIS                         = 2709,
     DK_ICON_ID_THREAT_OF_THASSARIAN             = 2023,
     DK_ICON_ID_SUDDEN_DOOM                      = 1939,
-    DK_ICON_ID_EPIDEMIC                         = 234
+    DK_ICON_ID_EPIDEMIC                         = 234,
+    DK_ICON_ID_DESPERATION                      = 24    // Blood Gorged passives, reworked into Desperation
 };
 
 enum Misc
@@ -515,8 +559,17 @@ class spell_dk_improved_blood_presence_triggered : public AuraScript
         PreventDefaultAction();
         if (DamageInfo* dmgInfo = eventInfo.GetDamageInfo())
         {
+            Unit* actor = eventInfo.GetActor();
             int32 bp0 = CalculatePct(static_cast<int32>(dmgInfo->GetDamage()), aurEff->GetAmount());
-            eventInfo.GetActor()->CastCustomSpell(SPELL_DK_IMPROVED_BLOOD_PRESENCE_HEAL, SPELLVALUE_BASE_POINT0, bp0, eventInfo.GetActor(), true, nullptr, aurEff);
+
+            // Death Knight rebalance (custom): Desperation heals more the lower your health; Vampiric Frenzy doubles
+            // the healing in Blood Presence
+            if (AuraEffect const* desperation = actor->GetDummyAuraEffect(SPELLFAMILY_DEATHKNIGHT, DK_ICON_ID_DESPERATION, EFFECT_0))
+                AddPct(bp0, desperation->GetAmount() * std::clamp((100.0f - actor->GetHealthPct()) / 65.0f, 0.0f, 1.0f));
+            if (actor->HasAura(SPELL_DK_VAMPIRIC_FRENZY) && actor->HasAura(SPELL_DK_BLOOD_PRESENCE))
+                bp0 *= 2;
+
+            actor->CastCustomSpell(SPELL_DK_IMPROVED_BLOOD_PRESENCE_HEAL, SPELLVALUE_BASE_POINT0, bp0, actor, true, nullptr, aurEff);
         }
     }
 
@@ -775,9 +828,17 @@ class spell_dk_scent_of_blood_trigger : public AuraScript
         return (eventInfo.GetHitMask() & (PROC_EX_DODGE | PROC_EX_PARRY)) || (eventInfo.GetDamageInfo() && eventInfo.GetDamageInfo()->GetDamage());
     }
 
+    // Death Knight rebalance (custom): dodges and parries also grant a Crimson Charge for the next Death Strike
+    void HandleCrimsonCharge(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        if (eventInfo.GetHitMask() & (PROC_EX_DODGE | PROC_EX_PARRY))
+            GetTarget()->CastSpell(GetTarget(), SPELL_DK_CRIMSON_CHARGE, true, nullptr, aurEff);
+    }
+
     void Register() override
     {
         DoCheckProc += AuraCheckProcFn(spell_dk_scent_of_blood_trigger::CheckProc);
+        AfterEffectProc += AuraEffectProcFn(spell_dk_scent_of_blood_trigger::HandleCrimsonCharge, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
     }
 };
 
@@ -1633,13 +1694,55 @@ class spell_dk_death_pact : public SpellScript
 };
 
 // -49998 - Death Strike
+// -62905 - Improved Death Strike (Death Knight rebalance, custom): remembers recent damage taken for Death Strike
+class spell_dk_improved_death_strike : public AuraScript
+{
+    PrepareAuraScript(spell_dk_improved_death_strike);
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        DamageInfo* damageInfo = eventInfo.GetDamageInfo();
+        if (!damageInfo || !damageInfo->GetDamage())
+            return;
+
+        Milliseconds now = GameTime::GetGameTimeMS();
+        Prune(now);
+        _damageTaken.emplace_back(now, damageInfo->GetDamage());
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(spell_dk_improved_death_strike::HandleProc, EFFECT_0, SPELL_AURA_ADD_PCT_MODIFIER);
+    }
+
+public:
+    uint32 GetRecentDamageTaken()
+    {
+        Prune(GameTime::GetGameTimeMS());
+        uint32 total = 0;
+        for (auto const& entry : _damageTaken)
+            total += entry.second;
+        return total;
+    }
+
+private:
+    void Prune(Milliseconds now)
+    {
+        while (!_damageTaken.empty() && now - _damageTaken.front().first > Milliseconds(DK_DEATH_STRIKE_DAMAGE_WINDOW))
+            _damageTaken.pop_front();
+    }
+
+    std::deque<std::pair<Milliseconds, uint32>> _damageTaken;
+};
+
 class spell_dk_death_strike : public SpellScript
 {
     PrepareSpellScript(spell_dk_death_strike);
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_DK_DEATH_STRIKE_HEAL });
+        return ValidateSpellInfo({ SPELL_DK_DEATH_STRIKE_HEAL, SPELL_DK_CRIMSON_CHARGE, SPELL_DK_BLOOD_SHIELD });
     }
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
@@ -1652,6 +1755,39 @@ class spell_dk_death_strike : public SpellScript
             // Improved Death Strike
             if (AuraEffect const* aurEff = caster->GetAuraEffect(SPELL_AURA_ADD_PCT_MODIFIER, SPELLFAMILY_DEATHKNIGHT, DK_ICON_ID_IMPROVED_DEATH_STRIKE, 0))
                 AddPct(bp, caster->CalculateSpellDamage(caster, aurEff->GetSpellInfo(), 2));
+
+            // Death Knight rebalance (custom): with Improved Death Strike, heal at least a share of recent damage taken
+            Aura* improved = caster->GetAuraOfRankedSpell(SPELL_DK_IMPROVED_DEATH_STRIKE_R1);
+            if (improved)
+                if (auto* tracker = improved->GetScript<spell_dk_improved_death_strike>("spell_dk_improved_death_strike"))
+                {
+                    int32 fromDamage = CalculatePct(int32(tracker->GetRecentDamageTaken()), DK_DEATH_STRIKE_DAMAGE_PCT_PER_RANK * improved->GetSpellInfo()->GetRank());
+                    bp = std::max(bp, fromDamage);
+                }
+
+            // Crimson Charges from Scent of Blood
+            if (Aura* crimson = caster->GetAura(SPELL_DK_CRIMSON_CHARGE))
+            {
+                AddPct(bp, crimson->GetSpellInfo()->Effects[EFFECT_0].CalcValue() * crimson->GetStackAmount());
+                crimson->Remove();
+            }
+
+            // Sanguine Bulwark, only in Frost Presence
+            bool bulwark = caster->HasAura(SPELL_DK_SANGUINE_BULWARK) && caster->HasAura(SPELL_DK_FROST_PRESENCE);
+            if (bulwark)
+                AddPct(bp, sSpellMgr->AssertSpellInfo(SPELL_DK_SANGUINE_BULWARK)->Effects[EFFECT_0].CalcValue());
+
+            // Healing past maximum health becomes a Blood Shield (Improved Death Strike)
+            int32 overheal = bp - int32(caster->GetMaxHealth() - caster->GetHealth());
+            if (improved && overheal > 0)
+            {
+                int32 shield = CalculatePct(overheal, DK_BLOOD_SHIELD_PCT);
+                if (bulwark)
+                    AddPct(shield, DK_SANGUINE_BULWARK_SHIELD_BONUS_PCT);
+                shield = std::min<int32>(shield, caster->CountPctFromMaxHealth(DK_BLOOD_SHIELD_MAX_HEALTH_PCT));
+                caster->CastCustomSpell(SPELL_DK_BLOOD_SHIELD, SPELLVALUE_BASE_POINT0, shield, caster, true);
+            }
+
             caster->CastCustomSpell(caster, SPELL_DK_DEATH_STRIKE_HEAL, &bp, nullptr, nullptr, false);
         }
     }
@@ -1689,9 +1825,22 @@ class spell_dk_ghoul_explode : public SpellScript
         }
     }
 
+    // Death Knight rebalance (custom): the explosion leaves the master's diseases on everything it hits
+    void InfectTarget(SpellEffIndex /*effIndex*/)
+    {
+        Unit* master = GetCaster()->GetOwner();
+        Unit* target = GetHitUnit();
+        if (master && target && master->IsValidAttackTarget(target))
+        {
+            master->CastSpell(target, SPELL_DK_BLOOD_PLAGUE, true);
+            master->CastSpell(target, SPELL_DK_FROST_FEVER, true);
+        }
+    }
+
     void Register() override
     {
         OnEffectLaunchTarget += SpellEffectFn(spell_dk_ghoul_explode::HandleDamage, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
+        OnEffectHitTarget += SpellEffectFn(spell_dk_ghoul_explode::InfectTarget, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
         OnEffectHitTarget += SpellEffectFn(spell_dk_ghoul_explode::Suicide, EFFECT_1, SPELL_EFFECT_SCHOOL_DAMAGE);
     }
 };
@@ -2250,7 +2399,7 @@ class spell_dk_scourge_strike : public SpellScript
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_DK_SCOURGE_STRIKE_TRIGGERED });
+        return ValidateSpellInfo({ SPELL_DK_SCOURGE_STRIKE_TRIGGERED, SPELL_DK_LINGERING_ROT, SPELL_DK_ROTTING_PLAGUE });
     }
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
@@ -2258,15 +2407,42 @@ class spell_dk_scourge_strike : public SpellScript
         Unit* caster = GetCaster();
         if (Unit* unitTarget = GetHitUnit())
         {
-            uint8 mode = caster->GetAuraEffectDummy(SPELL_DK_GLYPH_OF_SCOURGE_STRIKE) ? 2 : 0;
             float disease_amt = GetEffectValue();
 
             // Death Knight T8 Melee 4P Bonus
             if (AuraEffect const* aurEff = caster->GetAuraEffect(SPELL_DK_ITEM_T8_MELEE_4P_BONUS, EFFECT_0))
                 AddPct(disease_amt, aurEff->GetAmount());
 
-            multiplier = disease_amt * unitTarget->GetDiseasesByCaster(caster->GetGUID(), mode) / 100.0f;
+            multiplier = disease_amt * unitTarget->GetDiseasesByCaster(caster->GetGUID()) / 100.0f;
             guid = unitTarget->GetGUID();
+
+            // Death Knight rebalance (custom): the Glyph of Scourge Strike extension is baseline; the glyph raises its cap
+            uint32 maxExtension = caster->GetAuraEffectDummy(SPELL_DK_GLYPH_OF_SCOURGE_STRIKE) ? DK_DISEASE_EXTENSION_MAX_GLYPHED : DK_DISEASE_EXTENSION_MAX;
+            ExtendDiseases(caster, unitTarget, maxExtension);
+        }
+    }
+
+    // Each Scourge Strike extends the caster's diseases on the target, up to maxExtension in total
+    static void ExtendDiseases(Unit* caster, Unit* target, uint32 maxExtension)
+    {
+        for (AuraEffect const* aurEff : target->GetAuraEffectsByType(SPELL_AURA_PERIODIC_DAMAGE))
+        {
+            SpellInfo const* spellInfo = aurEff->GetSpellInfo();
+            if (spellInfo->SpellFamilyName != SPELLFAMILY_DEATHKNIGHT || !(spellInfo->SpellFamilyFlags[2] & 0x2) || aurEff->GetCasterGUID() != caster->GetGUID())
+                continue;
+
+            Aura* disease = aurEff->GetBase();
+            int32 currentMax = disease->GetMaxDuration();
+            int32 cap = spellInfo->GetMaxDuration() + int32(maxExtension);
+            if (AuraEffect const* epidemic = caster->GetAuraEffect(SPELL_AURA_ADD_FLAT_MODIFIER, SPELLFAMILY_DEATHKNIGHT, DK_ICON_ID_EPIDEMIC, EFFECT_0))
+                cap += epidemic->GetAmount();
+
+            if (currentMax < cap)
+            {
+                int32 step = std::min<int32>(DK_DISEASE_EXTENSION_STEP, cap - currentMax);
+                disease->SetDuration(disease->GetDuration() + step);
+                disease->SetMaxDuration(currentMax + step);
+            }
         }
     }
 
@@ -2277,6 +2453,11 @@ class spell_dk_scourge_strike : public SpellScript
         {
             int32 bp = GetHitDamage() * multiplier;
             caster->CastCustomSpell(unitTarget, SPELL_DK_SCOURGE_STRIKE_TRIGGERED, &bp, nullptr, nullptr, true);
+
+            // Death Knight rebalance (custom): Lingering Rot stack, and Rotting Plague with the talent
+            caster->CastSpell(unitTarget, SPELL_DK_LINGERING_ROT, true);
+            if (caster->HasAura(SPELL_DK_ROTTING_PLAGUE_TALENT))
+                caster->CastSpell(unitTarget, SPELL_DK_ROTTING_PLAGUE, true);
 
             // Xinef: Shadowmourne hack (scourge strike trigger proc disabled...)
             if (roll_chance_i(75) && caster->FindMap() && !caster->FindMap()->IsBattlegroundOrArena() && caster->HasAura(71903) && !caster->HasAura(SPELL_SHADOWMOURNE_CHAOS_BANE_BUFF))
@@ -2534,13 +2715,14 @@ class spell_dk_unholy_blight : public AuraScript
         return ValidateSpellInfo({ SPELL_DK_UNHOLY_BLIGHT_DOT, SPELL_DK_GLYPH_OF_UNHOLY_BLIGHT });
     }
 
+    // Death Knight rebalance (custom): triggered by Virulent Surge, which deals no damage itself
     bool CheckProc(ProcEventInfo& eventInfo)
     {
-        DamageInfo* damageInfo = eventInfo.GetDamageInfo();
-        return damageInfo && damageInfo->GetDamage();
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        return spellInfo && spellInfo->Id == SPELL_DK_VIRULENT_SURGE;
     }
 
-    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
         Unit* caster = GetCaster();
@@ -2552,7 +2734,7 @@ class spell_dk_unholy_blight : public AuraScript
         if (!unholyBlight)
             return;
 
-        int32 bp = CalculatePct(static_cast<int32>(eventInfo.GetDamageInfo()->GetDamage()), aurEff->GetAmount());
+        int32 bp = CalculatePct(static_cast<int32>(caster->GetTotalAttackPowerValue(BASE_ATTACK)), DK_UNHOLY_BLIGHT_AP_PCT);
 
         // Glyph of Unholy Blight
         if (AuraEffect* glyph = caster->GetAuraEffect(SPELL_DK_GLYPH_OF_UNHOLY_BLIGHT, EFFECT_0))
@@ -2761,8 +2943,8 @@ class spell_dk_killing_machine : public AuraScript
     {
         if (spellMod)
         {
-            // Icy Touch (mask0=2), Frost Strike (mask1=4), Howling Blast (mask1=2)
-            spellMod->mask = flag96(2, 6, 0);
+            // Icy Touch (mask0=2), Frost Strike (mask1=4), Howling Blast (mask1=2), Obliterate (mask1=0x20000, custom)
+            spellMod->mask = flag96(2, 0x20006, 0);
         }
     }
 
@@ -2824,7 +3006,8 @@ class spell_dk_threat_of_thassarian : public AuraScript
             SPELL_DK_PLAGUE_STRIKE_OFF_HAND_R1,
             SPELL_DK_DEATH_STRIKE_OFF_HAND_R1,
             SPELL_DK_RUNE_STRIKE_OFF_HAND_R1,
-            SPELL_DK_BLOOD_STRIKE_OFF_HAND_R1
+            SPELL_DK_BLOOD_STRIKE_OFF_HAND_R1,
+            SPELL_DK_HEART_STRIKE_OFF_HAND_R1
         });
     }
 
@@ -2862,6 +3045,9 @@ class spell_dk_threat_of_thassarian : public AuraScript
         // Rune Strike
         else if (spellInfo->SpellFamilyFlags[1] & 0x20000000)
             spellId = SPELL_DK_RUNE_STRIKE_OFF_HAND_R1;
+        // Heart Strike, with Glyph of Blood Strike
+        else if ((spellInfo->SpellFamilyFlags[0] & 0x01000000) && caster->HasAura(SPELL_DK_GLYPH_OF_BLOOD_STRIKE))
+            spellId = SPELL_DK_HEART_STRIKE_OFF_HAND_R1;
 
         if (!spellId)
             return;
@@ -2900,28 +3086,6 @@ class spell_dk_glyph_of_death_grip : public AuraScript
     void Register() override
     {
         OnEffectProc += AuraEffectProcFn(spell_dk_glyph_of_death_grip::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
-    }
-};
-
-// 58642 - Glyph of Scourge Strike
-class spell_dk_glyph_of_scourge_strike : public AuraScript
-{
-    PrepareAuraScript(spell_dk_glyph_of_scourge_strike);
-
-    bool Validate(SpellInfo const* /*spellInfo*/) override
-    {
-        return ValidateSpellInfo({ SPELL_DK_GLYPH_OF_SCOURGE_STRIKE_SCRIPT });
-    }
-
-    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
-    {
-        PreventDefaultAction();
-        eventInfo.GetActor()->CastSpell(eventInfo.GetActionTarget(), SPELL_DK_GLYPH_OF_SCOURGE_STRIKE_SCRIPT, true, nullptr, aurEff);
-    }
-
-    void Register() override
-    {
-        OnEffectProc += AuraEffectProcFn(spell_dk_glyph_of_scourge_strike::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
     }
 };
 
@@ -3000,6 +3164,244 @@ class spell_dk_pvp_4p_bonus : public AuraScript
     }
 };
 
+// Death Knight rebalance (custom, .agents/plans/dk-rebalance) -------------------------------------------------------
+
+// 56815 - Rune Strike: heals for part of its damage (twice as much with Sanguine Bulwark in Frost Presence)
+class spell_dk_rune_strike : public SpellScript
+{
+    PrepareSpellScript(spell_dk_rune_strike);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_DK_RUNE_STRIKE_HEAL });
+    }
+
+    void HandleAfterHit()
+    {
+        Unit* caster = GetCaster();
+        int32 heal = CalculatePct(GetHitDamage(), DK_RUNE_STRIKE_HEAL_PCT);
+        if (caster->HasAura(SPELL_DK_SANGUINE_BULWARK) && caster->HasAura(SPELL_DK_FROST_PRESENCE))
+            heal *= 2;
+        if (heal > 0)
+            caster->CastCustomSpell(SPELL_DK_RUNE_STRIKE_HEAL, SPELLVALUE_BASE_POINT0, heal, caster, true);
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(spell_dk_rune_strike::HandleAfterHit);
+    }
+};
+
+// 55078 - Blood Plague, 55095 - Frost Fever, 600014 - Rotting Plague: Contagion spreads them when the victim dies
+class spell_dk_disease_contagion : public AuraScript
+{
+    PrepareAuraScript(spell_dk_disease_contagion);
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (GetTargetApplication()->GetRemoveMode() != AURA_REMOVE_BY_DEATH)
+            return;
+
+        Unit* caster = GetCaster();
+        Unit* victim = GetTarget();
+        if (!caster || !caster->IsAlive() || !caster->IsInMap(victim))
+            return;
+
+        AuraEffect const* contagion = caster->GetAuraEffectOfRankedSpell(SPELL_DK_CONTAGION_R1, EFFECT_0);
+        if (!contagion || !roll_chance_i(contagion->GetAmount()))
+            return;
+
+        std::list<Unit*> nearby;
+        Acore::AnyUnfriendlyUnitInObjectRangeCheck check(victim, caster, DK_CONTAGION_RANGE);
+        Acore::UnitListSearcher<Acore::AnyUnfriendlyUnitInObjectRangeCheck> searcher(victim, nearby, check);
+        Cell::VisitObjects(victim, searcher, DK_CONTAGION_RANGE);
+
+        Unit* next = nullptr;
+        for (Unit* candidate : nearby)
+        {
+            if (candidate == victim || !candidate->IsAlive() || !caster->IsValidAttackTarget(candidate) || candidate->HasAura(GetId(), caster->GetGUID()))
+                continue;
+            if (!next || victim->GetDistance(candidate) < victim->GetDistance(next))
+                next = candidate;
+        }
+
+        if (next)
+            caster->CastSpell(next, GetId(), true);
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(spell_dk_disease_contagion::HandleRemove, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 63560 - Ghoul Frenzy: while active, the ghoul's attacks refresh its master's diseases on the target
+class spell_dk_ghoul_frenzy : public AuraScript
+{
+    PrepareAuraScript(spell_dk_ghoul_frenzy);
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        Unit* master = GetCaster();
+        Unit* target = eventInfo.GetActionTarget();
+        if (!master || !target)
+            return;
+
+        for (AuraEffect* aurEff : target->GetAuraEffectsByType(SPELL_AURA_PERIODIC_DAMAGE))
+        {
+            SpellInfo const* spellInfo = aurEff->GetSpellInfo();
+            if (spellInfo->SpellFamilyName == SPELLFAMILY_DEATHKNIGHT && (spellInfo->SpellFamilyFlags[2] & 0x2) && aurEff->GetCasterGUID() == master->GetGUID())
+                aurEff->GetBase()->RefreshDuration();
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(spell_dk_ghoul_frenzy::HandleProc, EFFECT_1, SPELL_AURA_MOD_MELEE_HASTE);
+    }
+};
+
+// 50444 - Corpse Explosion (damage): leaves the Death Knight's diseases on everything it hits
+class spell_dk_corpse_explosion_disease : public SpellScript
+{
+    PrepareSpellScript(spell_dk_corpse_explosion_disease);
+
+    void HandleHit(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        if (Unit* target = GetHitUnit())
+            if (caster && caster->IsValidAttackTarget(target))
+            {
+                caster->CastSpell(target, SPELL_DK_BLOOD_PLAGUE, true);
+                caster->CastSpell(target, SPELL_DK_FROST_FEVER, true);
+            }
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_dk_corpse_explosion_disease::HandleHit, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
+    }
+};
+
+// 600020 - Plague Swarm (Summon Gargoyle's talent slot): ticks the swarm damage on everything inside
+class spell_dk_plague_swarm : public AuraScript
+{
+    PrepareAuraScript(spell_dk_plague_swarm);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_DK_PLAGUE_SWARM_DAMAGE });
+    }
+
+    void HandlePeriodic(AuraEffect const* aurEff)
+    {
+        PreventDefaultAction();
+        if (Unit* caster = GetCaster())
+        {
+            int32 damage = aurEff->GetAmount();
+            caster->CastCustomSpell(GetTarget(), SPELL_DK_PLAGUE_SWARM_DAMAGE, &damage, nullptr, nullptr, true, nullptr, aurEff);
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectPeriodic += AuraEffectPeriodicFn(spell_dk_plague_swarm::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_DUMMY);
+    }
+};
+
+// 600021 - Plague Swarm (damage): stronger for each disease and Lingering Rot stack the caster has on the target
+class spell_dk_plague_swarm_damage : public SpellScript
+{
+    PrepareSpellScript(spell_dk_plague_swarm_damage);
+
+    void RecalculateDamage()
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
+
+        uint32 stacks = target->GetDiseasesByCaster(caster->GetGUID());
+        if (Aura const* rot = target->GetAura(SPELL_DK_LINGERING_ROT, caster->GetGUID()))
+            stacks += rot->GetStackAmount();
+
+        int32 damage = GetHitDamage();
+        AddPct(damage, DK_PLAGUE_SWARM_BONUS_PER_STACK_PCT * stacks);
+        SetHitDamage(target->CalculateAOEDamageReduction(damage, GetSpellInfo()->SchoolMask, false));
+    }
+
+    void Register() override
+    {
+        OnHit += SpellHitFn(spell_dk_plague_swarm_damage::RecalculateDamage);
+    }
+};
+
+// 600061 - Sanguine Hunger (Rune of Sanguine Hunger proc): melee hits heal for part of their damage
+class spell_dk_sanguine_hunger : public AuraScript
+{
+    PrepareAuraScript(spell_dk_sanguine_hunger);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_DK_SANGUINE_HUNGER_HEAL });
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        DamageInfo* damageInfo = eventInfo.GetDamageInfo();
+        if (!damageInfo || !damageInfo->GetDamage())
+            return;
+
+        int32 heal = CalculatePct(static_cast<int32>(damageInfo->GetDamage()), aurEff->GetAmount());
+        if (heal > 0)
+            GetTarget()->CastCustomSpell(SPELL_DK_SANGUINE_HUNGER_HEAL, SPELLVALUE_BASE_POINT0, heal, GetTarget(), true, nullptr, aurEff);
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(spell_dk_sanguine_hunger::HandleProc, EFFECT_1, SPELL_AURA_DUMMY);
+    }
+};
+
+// -600030 - Unquenchable Thirst
+class spell_dk_unquenchable_thirst : public AuraScript
+{
+    PrepareAuraScript(spell_dk_unquenchable_thirst);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_DK_GLYPH_OF_UNQUENCHABLE_THIRST });
+    }
+
+    // The buffs stack to 7 for the glyph; without it they stop at 5 and only refresh
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+
+        Unit* target = GetTarget();
+        uint32 buffId = aurEff->GetSpellInfo()->Effects[EFFECT_0].TriggerSpell;
+        uint8 maxStacks = target->HasAura(SPELL_DK_GLYPH_OF_UNQUENCHABLE_THIRST)
+            ? DK_UNQUENCHABLE_THIRST_MAX_STACKS_GLYPHED : DK_UNQUENCHABLE_THIRST_MAX_STACKS;
+        if (Aura* buff = target->GetAura(buffId))
+        {
+            if (buff->GetStackAmount() >= maxStacks)
+            {
+                buff->RefreshDuration();
+                return;
+            }
+        }
+
+        target->CastSpell(target, buffId, true, nullptr, aurEff);
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(spell_dk_unquenchable_thirst::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 void AddSC_deathknight_spell_scripts()
 {
     RegisterSpellScript(spell_dk_wandering_plague);
@@ -3062,7 +3464,16 @@ void AddSC_deathknight_spell_scripts()
     RegisterSpellScript(spell_dk_sudden_doom);
     RegisterSpellScript(spell_dk_threat_of_thassarian);
     RegisterSpellScript(spell_dk_glyph_of_death_grip);
-    RegisterSpellScript(spell_dk_glyph_of_scourge_strike);
     RegisterSpellScript(spell_dk_glyph_of_scourge_strike_script);
     RegisterSpellScript(spell_dk_pvp_4p_bonus);
+    // Death Knight rebalance (custom)
+    RegisterSpellScript(spell_dk_improved_death_strike);
+    RegisterSpellScript(spell_dk_rune_strike);
+    RegisterSpellScript(spell_dk_disease_contagion);
+    RegisterSpellScript(spell_dk_ghoul_frenzy);
+    RegisterSpellScript(spell_dk_corpse_explosion_disease);
+    RegisterSpellScript(spell_dk_plague_swarm);
+    RegisterSpellScript(spell_dk_plague_swarm_damage);
+    RegisterSpellScript(spell_dk_sanguine_hunger);
+    RegisterSpellScript(spell_dk_unquenchable_thirst);
 }

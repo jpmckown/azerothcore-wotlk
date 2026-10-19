@@ -1558,6 +1558,9 @@ public:
     void ModifyAuraState(AuraStateType flag, bool apply);
     uint32 BuildAuraStateUpdateForTarget(Unit* target) const;
     bool HasAuraState(AuraStateType flag, SpellInfo const* spellProto = nullptr, Unit const* Caster = nullptr) const;
+    // Death Knight rebalance (custom): rooted, stunned or snared targets, or any target while the Death Knight's
+    // Frozen Window is open, count as frozen for Frost talents
+    [[nodiscard]] bool CountsAsFrozenForDeathKnight(Unit const* deathKnight) const;
 
     /*********************************************************/
     /***         METHODS RELATED TO PROCS SYSTEM           ***/

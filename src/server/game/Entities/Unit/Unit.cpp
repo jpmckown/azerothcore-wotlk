@@ -7456,6 +7456,70 @@ bool Unit::HasAuraState(AuraStateType flag, SpellInfo const* spellProto, Unit co
     return HasFlag(UNIT_FIELD_AURASTATE, 1 << (flag - 1));
 }
 
+// Death Knight rebalance (custom, .agents/plans/dk-rebalance)
+namespace
+{
+    enum DeathKnightRebalance
+    {
+        SPELL_DK_BLOOD_PRESENCE          = 48266,
+        SPELL_DK_UNHOLY_PRESENCE         = 48265,
+        SPELL_DK_FROZEN_WINDOW           = 600000,
+        SPELL_DK_BITTER_COLD_R1          = 600005,
+        SPELL_DK_UNQUENCHABLE_THIRST_R1  = 600033,
+        SPELL_DK_UNQUENCHABLE_THIRST_R3  = 600035,
+        SPELL_DK_VAMPIRIC_FRENZY         = 600040,
+        DK_ICON_DESPERATION              = 24,   // Blood Gorged passives, reworked into Desperation
+        DK_ICON_GLACIER_ROT              = 196,
+    };
+
+    // Desperation scales from nothing at full health to its full amount at 35% health or below
+    float DesperationFactor(Unit const* deathKnight)
+    {
+        return std::clamp((100.0f - deathKnight->GetHealthPct()) / 65.0f, 0.0f, 1.0f);
+    }
+
+    // Percent damage bonuses that depend on the Death Knight's own state (applied to spells and melee alike)
+    float DeathKnightDamageBonusPct(Unit const* deathKnight, SpellInfo const* spellProto)
+    {
+        if (!deathKnight->IsPlayer() || deathKnight->getClass() != CLASS_DEATH_KNIGHT)
+            return 0.0f;
+
+        float pct = 0.0f;
+        if (AuraEffect const* desperation = deathKnight->GetDummyAuraEffect(SPELLFAMILY_DEATHKNIGHT, DK_ICON_DESPERATION, EFFECT_0))
+            pct += desperation->GetAmount() * DesperationFactor(deathKnight);
+
+        // Vampiric Frenzy: each Unquenchable Thirst stack adds damage while in Blood Presence
+        if (deathKnight->HasAura(SPELL_DK_BLOOD_PRESENCE))
+            if (AuraEffect const* frenzy = deathKnight->GetAuraEffect(SPELL_DK_VAMPIRIC_FRENZY, EFFECT_0))
+                for (uint32 thirst = SPELL_DK_UNQUENCHABLE_THIRST_R1; thirst <= SPELL_DK_UNQUENCHABLE_THIRST_R3; ++thirst)
+                    if (Aura const* stacks = deathKnight->GetAura(thirst))
+                        pct += frenzy->GetAmount() * stacks->GetStackAmount();
+
+        if (!spellProto || spellProto->SpellFamilyName != SPELLFAMILY_DEATHKNIGHT)
+            return pct;
+
+        // Bitter Cold: Frost Strike and Obliterate while the Frozen Window is open
+        if ((spellProto->SpellFamilyFlags[1] & 0x00020004) && deathKnight->HasAura(SPELL_DK_FROZEN_WINDOW))
+            if (AuraEffect const* bitterCold = deathKnight->GetAuraEffectOfRankedSpell(SPELL_DK_BITTER_COLD_R1, EFFECT_0))
+                pct += bitterCold->GetAmount();
+
+        // Unholy Presence: diseases deal 15% more damage
+        if ((spellProto->SpellFamilyFlags[2] & 0x2) && deathKnight->HasAura(SPELL_DK_UNHOLY_PRESENCE))
+            pct += 15.0f;
+
+        return pct;
+    }
+}
+
+bool Unit::CountsAsFrozenForDeathKnight(Unit const* deathKnight) const
+{
+    if (deathKnight && deathKnight->HasAura(SPELL_DK_FROZEN_WINDOW))
+        return true;
+
+    return HasAuraState(AURA_STATE_FROZEN) || HasAuraType(SPELL_AURA_MOD_ROOT) || HasAuraType(SPELL_AURA_MOD_STUN)
+        || HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED);
+}
+
 void Unit::SetOwnerGUID(ObjectGuid owner)
 {
     if (GetOwnerGUID() == owner)
@@ -8321,21 +8385,20 @@ float Unit::SpellPctDamageModsDone(Unit* victim, SpellInfo const* spellProto, Da
                             if (!victim->HealthAbovePct(35))
                                 AddPct(DoneTotalMod, (*i)->GetAmount());
                     }
-                    // Tundra Stalker
+                    // Tundra Stalker (custom: while the Frozen Window is open)
                     else
                     {
-                        // Frost Fever (target debuff)
-                        if (victim->HasAura(55095))
+                        if (owner->HasAura(SPELL_DK_FROZEN_WINDOW))
                             AddPct(DoneTotalMod, (*i)->GetAmount());
                         break;
                     }
                     break;
                 }
-            // Rage of Rivendare
+            // Rage of Rivendare (custom: any of the Death Knight's diseases)
             case 7293:
                 {
-                    if (victim->GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_DEATHKNIGHT, 0, 0x02000000, 0))
-                        AddPct(DoneTotalMod, (*i)->GetSpellInfo()->GetRank() * 2.0f);
+                    if (victim->GetDiseasesByCaster(owner->GetGUID()))
+                        AddPct(DoneTotalMod, (*i)->GetAmount());
                     break;
                 }
             // Twisted Faith
@@ -8491,14 +8554,11 @@ float Unit::SpellPctDamageModsDone(Unit* victim, SpellInfo const* spellProto, Da
             if (spellProto->SpellFamilyFlags[0] & 0x2)
                 if (AuraEffect* aurEff = GetDummyAuraEffect(SPELLFAMILY_DEATHKNIGHT, 2721, 0))
                     AddPct(DoneTotalMod, aurEff->GetAmount());
-
-            // Glacier Rot
-            if (spellProto->SpellFamilyFlags[0] & 0x2 || spellProto->SpellFamilyFlags[1] & 0x6)
-                if (AuraEffect* aurEff = GetDummyAuraEffect(SPELLFAMILY_DEATHKNIGHT, 196, 0))
-                    if (victim->GetDiseasesByCaster(owner->GetGUID()) > 0)
-                        AddPct(DoneTotalMod, aurEff->GetAmount());
             break;
     }
+
+    // Death Knight rebalance (custom): Desperation, Vampiric Frenzy, Bitter Cold, Unholy Presence diseases
+    AddPct(DoneTotalMod, DeathKnightDamageBonusPct(this, spellProto));
 
     return DoneTotalMod;
 }
@@ -8960,6 +9020,15 @@ float Unit::SpellTakenCritChance(Unit const* caster, SpellInfo const* spellProto
         return 0.0f;
 
     float crit_chance = doneChance;
+
+    // Glacier Rot (Death Knight rebalance, custom): Icy Touch, Howling Blast, Frost Strike and Obliterate gain crit
+    // chance against targets that count as frozen
+    if (caster && spellProto->SpellFamilyName == SPELLFAMILY_DEATHKNIGHT
+        && ((spellProto->SpellFamilyFlags[0] & 0x2) || (spellProto->SpellFamilyFlags[1] & 0x00020006)))
+        if (AuraEffect const* glacierRot = caster->GetDummyAuraEffect(SPELLFAMILY_DEATHKNIGHT, DK_ICON_GLACIER_ROT, EFFECT_0))
+            if (CountsAsFrozenForDeathKnight(caster))
+                crit_chance += glacierRot->GetAmount();
+
     switch (spellProto->DmgClass)
     {
         case SPELL_DAMAGE_CLASS_MAGIC:
@@ -10074,20 +10143,19 @@ uint32 Unit::MeleeDamageBonusDone(Unit* victim, uint32 pdamage, WeaponAttackType
                         if (!victim->HealthAbovePct(35))
                             AddPct(DoneTotalMod, (*i)->GetAmount());
                     }
-                    // Tundra Stalker
+                    // Tundra Stalker (custom: while the Frozen Window is open)
                     else
                     {
-                        // Frost Fever (target debuff)
-                        if (victim->HasAura(55095))
+                        if (owner->HasAura(SPELL_DK_FROZEN_WINDOW))
                             AddPct(DoneTotalMod, (*i)->GetAmount());
                     }
                     break;
                 }
-            // Rage of Rivendare
+            // Rage of Rivendare (custom: any of the Death Knight's diseases)
             case 7293:
                 {
-                    if (victim->GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_DEATHKNIGHT, 0, 0x02000000, 0))
-                        AddPct(DoneTotalMod, (*i)->GetSpellInfo()->GetRank() * 2.0f);
+                    if (victim->GetDiseasesByCaster(owner->GetGUID()))
+                        AddPct(DoneTotalMod, (*i)->GetAmount());
                     break;
                 }
             // Marked for Death
@@ -10116,18 +10184,8 @@ uint32 Unit::MeleeDamageBonusDone(Unit* victim, uint32 pdamage, WeaponAttackType
         }
     }
 
-    // Custom scripted damage
-    if (spellProto)
-        switch (spellProto->SpellFamilyName)
-        {
-            case SPELLFAMILY_DEATHKNIGHT:
-                // Glacier Rot
-                if (spellProto->SpellFamilyFlags[0] & 0x2 || spellProto->SpellFamilyFlags[1] & 0x6)
-                    if (AuraEffect* aurEff = GetDummyAuraEffect(SPELLFAMILY_DEATHKNIGHT, 196, 0))
-                        if (victim->GetDiseasesByCaster(owner->GetGUID()) > 0)
-                            AddPct(DoneTotalMod, aurEff->GetAmount());
-                break;
-        }
+    // Death Knight rebalance (custom): Desperation, Vampiric Frenzy, Bitter Cold (auto attacks included)
+    AddPct(DoneTotalMod, DeathKnightDamageBonusPct(this, spellProto));
 
     // Some spells don't benefit from done mods
     if (spellProto)
@@ -14935,7 +14993,12 @@ float Unit::MeleeSpellMissChance(Unit const* victim, WeaponAttackType attType, i
     // Check if dual wielding, add additional miss penalty - when mainhand has on next swing spell, offhand doesnt suffer penalty
     if (!spellId && (attType != RANGED_ATTACK) && HasOffhandWeaponForAttack() && (!m_currentSpells[CURRENT_MELEE_SPELL] || !m_currentSpells[CURRENT_MELEE_SPELL]->IsNextMeleeSwingSpell()))
     {
-        missChance += 19;
+        float dualWieldPenalty = 19.0f;
+        // Nerves of Cold Steel (custom): reduces the dual wield penalty
+        if (AuraEffect const* nervesOfColdSteel = GetAuraEffectOfRankedSpell(49226, EFFECT_0))
+            dualWieldPenalty = std::max(0.0f, dualWieldPenalty - nervesOfColdSteel->GetAmount());
+
+        missChance += dualWieldPenalty;
     }
 
     // bonus from skills is 0.04%
