@@ -47,6 +47,7 @@ Copied events should probably have a new owner
 #include "Opcodes.h"
 #include "Player.h"
 #include "SocialMgr.h"
+#include "Timer.h"
 #include "WorldSession.h"
 #include <utf8.h>
 
@@ -122,7 +123,8 @@ void WorldSession::HandleCalendarGetCalendar(WorldPacket& /*recvData*/)
     data.append(dataBuffer);
 
     // pussywizard
-    uint32 relationTime = sWorld->getIntConfig(CONFIG_INSTANCE_RESET_TIME_RELATIVE_TIMESTAMP) + sWorld->getIntConfig(CONFIG_INSTANCE_RESET_TIME_HOUR) * HOUR; // set point in time (default 29.12.2005) + X hours
+    // set point in time (default 29.12.2005) + X hours, server local time like the resets themselves
+    uint32 relationTime = uint32(Acore::Time::LocalTimeToUTCTime(sWorld->getIntConfig(CONFIG_INSTANCE_RESET_TIME_RELATIVE_TIMESTAMP) + sWorld->getIntConfig(CONFIG_INSTANCE_RESET_TIME_HOUR) * HOUR));
     data << uint32(relationTime);
 
     // Reuse variables

@@ -2951,6 +2951,22 @@ Quests.IgnoreAutoAccept = 0
 Quests.IgnoreAutoComplete = 0
 
 #
+#    Quests.ResetHour
+#        Description: Hour of the day (server local time) when daily, weekly and monthly quests reset.
+#        Range:       0-23
+#        Default:     6 - (06:00 AM)
+
+Quests.ResetHour = 6
+
+#
+#    Quests.WeeklyResetDay
+#        Description: Day of the week when weekly quests reset, at Quests.ResetHour.
+#        Range:       0-6 (0 = Sunday, 1 = Monday, ..., 6 = Saturday)
+#        Default:     4 - (Thursday)
+
+Quests.WeeklyResetDay = 4
+
+#
 #    Rate.RewardQuestMoney
 #        Description: Allows to tweak the amount of money rewarded by quests (does not affect RewardBonusMoney).
 #        Default:     1
@@ -3338,7 +3354,7 @@ Instance.IgnoreRaid = 0
 
 #
 #    Instance.ResetTimeHour
-#        Description: Hour of the day when the global instance reset occurs.
+#        Description: Hour of the day (server local time) when the global instance reset occurs.
 #        Range:       0-23
 #        Default:     4 - (04:00 AM)
 
@@ -3346,9 +3362,9 @@ Instance.ResetTimeHour = 4
 
 #
 #    Instance.ResetTimeRelativeTimestamp
-#        Description: Needed for displaying valid instance reset times in ingame calendar.
-#                     This timestamp should be set to a date in the past (midnight) on which
-#                     both 3-day and 7-day raids were reset.
+#        Description: Date (midnight GMT) of a past reset of every instance. Instance resets fall a whole
+#                     number of reset periods after this date, so it sets the weekday of 7-day raids and
+#                     the schedule of 3-day and 5-day ones. Also used for the reset times in the ingame calendar.
 #        Default:     1135814400 - (Thu, 29 Dec 2005 00:00:00 GMT - meaning that 7-day raid reset falls on Thursdays,
 #                                  while 3-day reset falls on "Thu 29 Dec 2005", "Sun 01 Jan 2006", "Wed 04 Jan 2006", and so on)
 

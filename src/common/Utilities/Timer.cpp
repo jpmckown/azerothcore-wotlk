@@ -316,18 +316,18 @@ time_t Acore::Time::GetNextTimeWithDayAndHour(int8 dayOfWeek, int8 hour)
         dayOfWeek = (localTm.tm_wday + 1) % 7;
     }
 
-    uint32 add;
-
     if (localTm.tm_wday >= dayOfWeek)
     {
-        add = (7 - (localTm.tm_wday - dayOfWeek)) * DAY;
+        localTm.tm_mday += 7 - (localTm.tm_wday - dayOfWeek);
     }
     else
     {
-        add = (dayOfWeek - localTm.tm_wday) * DAY;
+        localTm.tm_mday += dayOfWeek - localTm.tm_wday;
     }
 
-    return mktime(&localTm) + add;
+    // Step calendar days and let mktime pick the DST offset, so the result keeps the local hour across a DST switch
+    localTm.tm_isdst = -1;
+    return mktime(&localTm);
 }
 
 time_t Acore::Time::GetNextTimeWithMonthAndHour(int8 month, int8 hour)
@@ -358,6 +358,7 @@ time_t Acore::Time::GetNextTimeWithMonthAndHour(int8 month, int8 hour)
     }
 
     localTm.tm_mon = month;
+    localTm.tm_isdst = -1;
     return mktime(&localTm);
 }
 

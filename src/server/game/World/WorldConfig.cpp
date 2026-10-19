@@ -387,6 +387,8 @@ void WorldConfig::BuildConfigCache()
     SetConfigValue<uint32>(CONFIG_RANDOM_BG_RESET_HOUR, "Battleground.Random.ResetHour", 6, ConfigValueCache::Reloadable::Yes, [](uint32 const& value) { return value <= 23; }, "<= 23");
     SetConfigValue<uint32>(CONFIG_CALENDAR_DELETE_OLD_EVENTS_HOUR, "Calendar.DeleteOldEventsHour", 6, ConfigValueCache::Reloadable::Yes, [](uint32 const& value) { return value <= 23; }, "<= 23");
     SetConfigValue<uint32>(CONFIG_GUILD_RESET_HOUR, "Guild.ResetHour", 6, ConfigValueCache::Reloadable::Yes, [](uint32 const& value) { return value <= 23; }, "<= 23");
+    SetConfigValue<uint32>(CONFIG_QUEST_RESET_HOUR, "Quests.ResetHour", 6, ConfigValueCache::Reloadable::Yes, [](uint32 const& value) { return value <= 23; }, "<= 23");
+    SetConfigValue<uint32>(CONFIG_WEEKLY_QUEST_RESET_DAY, "Quests.WeeklyResetDay", 4, ConfigValueCache::Reloadable::Yes, [](uint32 const& value) { return value <= 6; }, "<= 6");
 
     SetConfigValue<uint32>(CONFIG_GUILD_BANK_INITIAL_TABS, "Guild.BankInitialTabs", 0);
     SetConfigValue<uint32>(CONFIG_GUILD_BANK_TAB_COST_0, "Guild.BankTabCost0", 1000000);

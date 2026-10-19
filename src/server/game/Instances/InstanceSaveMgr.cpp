@@ -36,6 +36,45 @@
 #include "WorldSessionMgr.h"
 
 uint16 InstanceSaveMgr::ResetTimeDelay[] = {3600, 900, 300, 60, 0};
+
+namespace
+{
+    // Days since 1970-01-01 of a civil date, independent of the time zone
+    int64 DaysFromCivil(int64 year, int64 month, int64 day)
+    {
+        year -= month <= 2;
+        int64 const era = (year >= 0 ? year : year - 399) / 400;
+        int64 const yearOfEra = year - era * 400;
+        int64 const dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+        int64 const dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
+        return era * 146097 + dayOfEra - 719468;
+    }
+
+    // First global reset strictly after `after`: Instance.ResetTimeHour in server local time, on a day a whole
+    // number of periods away from the Instance.ResetTimeRelativeTimestamp date, so a 7-day reset keeps its weekday
+    // and the local hour holds across DST switches.
+    time_t GetNextGlobalResetTime(time_t after, uint32 periodDays)
+    {
+        int64 const anchorDay = int64(sWorld->getIntConfig(CONFIG_INSTANCE_RESET_TIME_RELATIVE_TIMESTAMP)) / DAY;
+        int32 const hour = int32(sWorld->getIntConfig(CONFIG_INSTANCE_RESET_TIME_HOUR));
+
+        tm localTm = Acore::Time::TimeBreakdown(after);
+        for (;;)
+        {
+            localTm.tm_hour = hour;
+            localTm.tm_min = 0;
+            localTm.tm_sec = 0;
+            localTm.tm_isdst = -1;
+            time_t const candidate = mktime(&localTm);
+
+            int64 const offset = DaysFromCivil(localTm.tm_year + 1900, localTm.tm_mon + 1, localTm.tm_mday) - anchorDay;
+            if (candidate > after && (offset % periodDays + periodDays) % periodDays == 0)
+                return candidate;
+
+            ++localTm.tm_mday;
+        }
+    }
+}
 PlayerBindStorage InstanceSaveMgr::playerBindStorage;
 BoundInstancesMap InstanceSaveMgr::emptyBoundInstancesMap;
 
@@ -303,10 +342,8 @@ void InstanceSaveMgr::LoadInstances()
 void InstanceSaveMgr::LoadResetTimes()
 {
     time_t now = GameTime::GetGameTime().count();
-    time_t today = (now / DAY) * DAY;
 
     // load the global respawn times for raid/heroic instances
-    uint32 diff = sWorld->getIntConfig(CONFIG_INSTANCE_RESET_TIME_HOUR) * HOUR;
     QueryResult result = CharacterDatabase.Query("SELECT mapid, difficulty, resettime FROM instance_reset");
     if (result)
     {
@@ -349,23 +386,22 @@ void InstanceSaveMgr::LoadResetTimes()
         if (!t)
         {
             // initialize the reset time
-            t = today + period + diff;
+            t = GetNextGlobalResetTime(now, period / DAY);
             SetResetTimeFor(mapid, difficulty, t);
             CharacterDatabase.DirectExecute("INSERT INTO instance_reset VALUES ('{}', '{}', '{}')", mapid, difficulty, (uint32)t);
         }
 
-        if (t < now)
+        // Expired instances are assumed to be cleaned already. A stored time off the reset schedule (the hour,
+        // anchor date or time zone changed) moves to the next scheduled reset.
+        if (t < now || GetNextGlobalResetTime(t - 1, period / DAY) != t)
         {
-            // assume that expired instances have already been cleaned
-            // calculate the next reset time
-            t = (t / DAY) * DAY;
-            t += ((today - t) / period + 1) * period + diff;
+            t = GetNextGlobalResetTime(now, period / DAY);
             SetResetTimeFor(mapid, difficulty, t);
             CharacterDatabase.DirectExecute("UPDATE instance_reset SET resettime = '{}' WHERE mapid = '{}' AND difficulty = '{}'", (uint32)t, mapid, difficulty);
         }
 
         // An extended lock runs one period past the reset, as _ResetOrWarnAll sets it after a runtime reset
-        SetExtendedResetTimeFor(mapid, difficulty, t + period);
+        SetExtendedResetTimeFor(mapid, difficulty, GetNextGlobalResetTime(t, period / DAY));
 
         // schedule the global reset/warning
         uint8 type;
@@ -734,15 +770,13 @@ void InstanceSaveMgr::_ResetOrWarnAll(uint32 mapid, Difficulty difficulty, bool 
         }
 
         // calculate the next reset time
-        uint32 diff = sWorld->getIntConfig(CONFIG_INSTANCE_RESET_TIME_HOUR) * HOUR;
-
         uint32 period = uint32(((mapDiff->resetTime * sWorld->getRate(RATE_INSTANCE_RESET_TIME)) / DAY) * DAY);
         if (period < DAY)
             period = DAY;
 
-        uint32 next_reset = uint32(((resetTime + MINUTE) / DAY * DAY) + period + diff);
+        uint32 next_reset = uint32(GetNextGlobalResetTime(resetTime + MINUTE, period / DAY));
         SetResetTimeFor(mapid, difficulty, next_reset);
-        SetExtendedResetTimeFor(mapid, difficulty, next_reset + period);
+        SetExtendedResetTimeFor(mapid, difficulty, GetNextGlobalResetTime(next_reset, period / DAY));
         ScheduleReset(time_t(next_reset - 3600), InstResetEvent(1, mapid, difficulty));
 
         // update it in the DB
