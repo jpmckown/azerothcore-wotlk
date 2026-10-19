@@ -2395,6 +2395,47 @@ SkillChance.MiningSteps   = 0
 SkillChance.SkinningSteps = 0
 
 #
+#    FirstAid.Scaling.Enable
+#        Description: Bandages heal a share of the target's maximum health when that is more
+#                     than their flat amount. The share grows with the bandage's required First Aid
+#                     skill and reaches the full percentage at Heavy Frostweave Bandage (400).
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled, flat amounts only)
+
+FirstAid.Scaling.Enable = 1
+
+#
+#    FirstAid.Scaling.HealthPct
+#    FirstAid.Scaling.InCombatHealthPct
+#        Description: Percentage of maximum health a top bandage heals over its full channel when
+#                     the target is out of combat or in combat.
+#        Range:       0-100
+#        Default:     40 - (FirstAid.Scaling.HealthPct)
+#                     20 - (FirstAid.Scaling.InCombatHealthPct)
+
+FirstAid.Scaling.HealthPct         = 40
+FirstAid.Scaling.InCombatHealthPct = 20
+
+#
+#    FirstAid.ClearRecentlyBandagedOutOfCombat
+#        Description: Remove Recently Bandaged when the target leaves combat, and do not apply it
+#                     for bandages used out of combat, so bandages can be chained between fights.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled, Recently Bandaged always lasts 60 seconds)
+
+FirstAid.ClearRecentlyBandagedOutOfCombat = 1
+
+#
+#    FirstAid.WellBandaged.HealthPct
+#        Description: Percentage of maximum health Well Bandaged restores over 30 seconds. It is
+#                     granted when a bandage channel completes on a target that is out of combat.
+#        Range:       0-100
+#        Default:     10 - (Enabled)
+#                     0  - (Disabled)
+
+FirstAid.WellBandaged.HealthPct = 10
+
+#
 #    OffhandCheckAtSpellUnlearn
 #        Description: Unlearning certain spells can change offhand weapon restrictions
 #                     for equip slots.

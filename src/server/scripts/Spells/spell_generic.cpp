@@ -27,6 +27,7 @@
 #include "GridNotifiers.h"
 #include "Group.h"
 #include "Pet.h"
+#include "PlayerScript.h"
 #include "ReputationMgr.h"
 #include "SkillDiscovery.h"
 #include "SpellAuraEffects.h"
@@ -3858,8 +3859,13 @@ class spell_gen_despawn_self : public SpellScript
 
 enum GenericBandage
 {
-    SPELL_RECENTLY_BANDAGED     = 11196
+    SPELL_RECENTLY_BANDAGED     = 11196,
+    SPELL_WELL_BANDAGED         = 500005  // custom spell_dbc entry
 };
+
+// Required First Aid skill of the best bandage in the game (Heavy Frostweave Bandage).
+// Bandages scale towards the full health percentage by their required skill against this.
+constexpr uint32 BANDAGE_FULL_SCALING_SKILL = 400;
 
 // 23567, 23568, 23569, 23696, 24412, 24413, 24414 - First Aid
 class spell_gen_bandage : public SpellScript
@@ -3891,6 +3897,82 @@ class spell_gen_bandage : public SpellScript
     {
         OnCheckCast += SpellCheckCastFn(spell_gen_bandage::CheckCast);
         AfterHit += SpellHitFn(spell_gen_bandage::HandleScript);
+    }
+};
+
+// -746, 23567, 23568, 23569, 23696, 24412, 24413, 24414 - First Aid
+class spell_gen_bandage_aura : public AuraScript
+{
+    PrepareAuraScript(spell_gen_bandage_aura);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_RECENTLY_BANDAGED, SPELL_WELL_BANDAGED });
+    }
+
+    // Heals whichever is higher: the bandage's flat amount or a share of the target's max health
+    void CalculateAmount(AuraEffect const* aurEff, int32& amount, bool& /*canBeRecalculated*/)
+    {
+        if (!sWorld->getBoolConfig(CONFIG_FIRST_AID_SCALING_ENABLE))
+            return;
+
+        ItemTemplate const* bandage = sObjectMgr->GetItemTemplate(GetAura()->GetCastItemEntry());
+        if (!bandage || bandage->RequiredSkill != SKILL_FIRST_AID)
+            return;
+
+        int32 ticks = aurEff->GetTotalTicks();
+        if (ticks <= 0)
+            return;
+
+        Unit* target = GetUnitOwner();
+        float pct = sWorld->getFloatConfig(target->IsInCombat()
+            ? CONFIG_FIRST_AID_IN_COMBAT_HEALTH_PCT : CONFIG_FIRST_AID_HEALTH_PCT);
+        pct *= std::min(1.0f, float(bandage->RequiredSkillRank) / BANDAGE_FULL_SCALING_SKILL);
+
+        amount = std::max(amount, int32(CalculatePct(target->GetMaxHealth(), pct)) / ticks);
+    }
+
+    // Out of combat the bandage does not lock the target out, and a full channel leaves Well Bandaged behind
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* target = GetUnitOwner();
+        if (target->IsInCombat())
+            return;
+
+        if (sWorld->getBoolConfig(CONFIG_FIRST_AID_CLEAR_RECENTLY_BANDAGED))
+            target->RemoveAurasDueToSpell(SPELL_RECENTLY_BANDAGED);
+
+        float wellBandagedPct = sWorld->getFloatConfig(CONFIG_FIRST_AID_WELL_BANDAGED_PCT);
+        if (wellBandagedPct <= 0.0f || GetTargetApplication()->GetRemoveMode() != AURA_REMOVE_BY_EXPIRE)
+            return;
+
+        SpellInfo const* wellBandaged = sSpellMgr->AssertSpellInfo(SPELL_WELL_BANDAGED);
+        int32 ticks = wellBandaged->GetMaxDuration() / wellBandaged->Effects[EFFECT_0].Amplitude;
+        int32 heal = int32(CalculatePct(target->GetMaxHealth(), wellBandagedPct)) / ticks;
+        target->CastCustomSpell(SPELL_WELL_BANDAGED, SPELLVALUE_BASE_POINT0, std::max(heal, 1), target, true);
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_gen_bandage_aura::CalculateAmount, EFFECT_0, SPELL_AURA_PERIODIC_HEAL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_gen_bandage_aura::HandleRemove, EFFECT_0, SPELL_AURA_PERIODIC_HEAL, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// Recently Bandaged only gates bandaging within a fight
+class spell_gen_bandage_leave_combat : public PlayerScript
+{
+public:
+    spell_gen_bandage_leave_combat() : PlayerScript("spell_gen_bandage_leave_combat", { PLAYERHOOK_ON_PLAYER_LEAVE_COMBAT }) { }
+
+    void OnPlayerLeaveCombat(Player* player) override
+    {
+        if (!sWorld->getBoolConfig(CONFIG_FIRST_AID_CLEAR_RECENTLY_BANDAGED))
+            return;
+
+        player->RemoveAurasDueToSpell(SPELL_RECENTLY_BANDAGED);
+        if (Pet* pet = player->GetPet())
+            pet->RemoveAurasDueToSpell(SPELL_RECENTLY_BANDAGED);
     }
 };
 
@@ -6335,7 +6417,8 @@ void AddSC_generic_spell_scripts()
     RegisterSpellScriptWithArgs(spell_gen_count_pct_from_max_hp, "spell_gen_50pct_count_pct_from_max_hp", 50);
     RegisterSpellScriptWithArgs(spell_gen_count_pct_from_max_hp, "spell_gen_26pct_count_pct_from_max_hp", 26);
     RegisterSpellScript(spell_gen_despawn_self);
-    RegisterSpellScript(spell_gen_bandage);
+    RegisterSpellAndAuraScriptPair(spell_gen_bandage, spell_gen_bandage_aura);
+    new spell_gen_bandage_leave_combat();
     RegisterSpellScript(spell_gen_paralytic_poison);
     RegisterSpellScript(spell_gen_prevent_emotes);
     RegisterSpellScript(spell_gen_blade_warding);

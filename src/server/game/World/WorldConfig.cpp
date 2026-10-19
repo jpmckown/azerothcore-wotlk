@@ -332,6 +332,12 @@ void WorldConfig::BuildConfigCache()
 
     SetConfigValue<uint32>(CONFIG_SKILL_GAIN_WEAPON, "SkillGain.Weapon", 1);
 
+    SetConfigValue<bool>(CONFIG_FIRST_AID_SCALING_ENABLE, "FirstAid.Scaling.Enable", true);
+    SetConfigValue<float>(CONFIG_FIRST_AID_HEALTH_PCT, "FirstAid.Scaling.HealthPct", 40.0f, ConfigValueCache::Reloadable::Yes, [](float const& value) { return value >= 0.0f && value <= 100.0f; }, ">= 0 and <= 100");
+    SetConfigValue<float>(CONFIG_FIRST_AID_IN_COMBAT_HEALTH_PCT, "FirstAid.Scaling.InCombatHealthPct", 20.0f, ConfigValueCache::Reloadable::Yes, [](float const& value) { return value >= 0.0f && value <= 100.0f; }, ">= 0 and <= 100");
+    SetConfigValue<bool>(CONFIG_FIRST_AID_CLEAR_RECENTLY_BANDAGED, "FirstAid.ClearRecentlyBandagedOutOfCombat", true);
+    SetConfigValue<float>(CONFIG_FIRST_AID_WELL_BANDAGED_PCT, "FirstAid.WellBandaged.HealthPct", 10.0f, ConfigValueCache::Reloadable::Yes, [](float const& value) { return value >= 0.0f && value <= 100.0f; }, ">= 0 and <= 100");
+
     SetConfigValue<uint32>(CONFIG_MAX_OVERSPEED_PINGS, "MaxOverspeedPings", 2, ConfigValueCache::Reloadable::Yes, [](uint32 const& value) { return value != 1; }, "!= 1");
 
     SetConfigValue<bool>(CONFIG_SAVE_RESPAWN_TIME_IMMEDIATELY, "SaveRespawnTimeImmediately", true);
