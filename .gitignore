@@ -23,6 +23,7 @@
 /apps/joiner
 /deps/deno
 /data/sql/custom/*
+/data/sql/wip/*
 /src/server/scripts/Custom/*
 !/src/server/scripts/Custom/README.md
 
@@ -137,3 +138,7 @@ e2e/go.work.sum
 
 .cache
 compile_commands.json
+
+
+client-patch/*
+*.log
