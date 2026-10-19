@@ -129,6 +129,7 @@ public:
             { "hidearea",          HandleHideAreaCommand,          rbac::RBAC_PERM_COMMAND_HIDEAREA,          Console::No  },
             { "additem",           HandleAddItemCommand,           rbac::RBAC_PERM_COMMAND_ADDITEM,           Console::Yes },
             { "additem set",       HandleAddItemSetCommand,        rbac::RBAC_PERM_COMMAND_ADDITEMSET,        Console::No  },
+            { "addrecipe",         HandleAddRecipeCommand,         rbac::RBAC_PERM_COMMAND_ADDITEM,         Console::Yes },
             { "wchange",           HandleChangeWeather,            rbac::RBAC_PERM_COMMAND_WCHANGE,           Console::No  },
             { "maxskill",          HandleMaxSkillCommand,          rbac::RBAC_PERM_COMMAND_MAXSKILL,          Console::No  },
             { "setskill",          HandleSetSkillCommand,          rbac::RBAC_PERM_COMMAND_SETSKILL,          Console::No  },
@@ -1992,6 +1993,141 @@ public:
             return false;
         }
 
+        return true;
+    }
+
+    static bool HandleAddRecipeCommand(ChatHandler* handler, SpellInfo const* spell, Optional<uint32> countArg)
+    {
+        if (!spell)
+        {
+            handler->SendErrorMessage(LANG_COMMAND_NOSPELLFOUND);
+            return false;
+        }
+
+        if (!SpellMgr::IsSpellValid(spell))
+        {
+            handler->SendErrorMessage(LANG_COMMAND_SPELL_BROKEN, spell->Id);
+            return false;
+        }
+
+        if (!spell->HasAttribute(SPELL_ATTR0_IS_TRADESKILL))
+        {
+            handler->PSendSysMessage("Spell {} is not a trade skill recipe.", spell->Id);
+            return false;
+        }
+
+        uint32 count = countArg ? *countArg : 1;
+        if (!count)
+        {
+            handler->SendErrorMessage(LANG_BAD_VALUE);
+            return false;
+        }
+
+        Player* playerTarget = handler->getSelectedPlayer();
+        Player* sessionPlayer = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+        if (!playerTarget)
+            playerTarget = sessionPlayer;
+        if (!playerTarget)
+            return false;
+
+        if (sessionPlayer && playerTarget != sessionPlayer && handler->HasLowerSecurity(playerTarget))
+            return false;
+
+        std::array<std::pair<uint32, uint32>, MAX_SPELL_REAGENTS> reagents;
+        uint8 reagentCount = 0;
+
+        for (uint8 i = 0; i < MAX_SPELL_REAGENTS; ++i)
+        {
+            if (spell->Reagent[i] <= 0 || spell->ReagentCount[i] == 0)
+                continue;
+
+            uint32 itemId = uint32(spell->Reagent[i]);
+            uint32 requiredCount = spell->ReagentCount[i] * count;
+
+            bool found = false;
+            for (uint8 j = 0; j < reagentCount; ++j)
+            {
+                if (reagents[j].first == itemId)
+                {
+                    reagents[j].second += requiredCount;
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found)
+                reagents[reagentCount++] = { itemId, requiredCount };
+        }
+
+        if (!reagentCount)
+        {
+            handler->PSendSysMessage("Recipe {} has no reagents.", spell->Id);
+            return false;
+        }
+
+        std::array<Item*, MAX_SPELL_REAGENTS> items = {};
+        for (uint8 i = 0; i < reagentCount; ++i)
+        {
+            if (!sObjectMgr->GetItemTemplate(reagents[i].first))
+            {
+                handler->SendErrorMessage(LANG_COMMAND_ITEMIDINVALID, reagents[i].first);
+                for (uint8 j = 0; j < i; ++j)
+                    delete items[j];
+                return false;
+            }
+
+            items[i] = Item::CreateItem(reagents[i].first, reagents[i].second, playerTarget);
+            if (!items[i])
+            {
+                handler->SendErrorMessage(LANG_COMMAND_ITEMIDINVALID, reagents[i].first);
+                for (uint8 j = 0; j < i; ++j)
+                    delete items[j];
+                return false;
+            }
+        }
+
+        InventoryResult storeResult = playerTarget->CanStoreItems(items.data(), reagentCount, nullptr);
+        for (uint8 i = 0; i < reagentCount; ++i)
+            delete items[i];
+
+        if (storeResult != EQUIP_ERR_OK)
+        {
+            handler->PSendSysMessage("Not enough room for all reagents.");
+            return false;
+        }
+
+        for (uint8 i = 0; i < reagentCount; ++i)
+        {
+            ItemPosCountVec dest;
+            InventoryResult msg = playerTarget->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, reagents[i].first, reagents[i].second);
+            if (msg != EQUIP_ERR_OK)
+            {
+                handler->PSendSysMessage("Not enough room for all reagents.");
+                return false;
+            }
+
+            Item* item = playerTarget->StoreNewItem(dest, reagents[i].first, true);
+            uint32 const stackCount = reagents[i].second;
+
+            if (sessionPlayer && sessionPlayer == playerTarget)
+            {
+                for (auto const& itemPos : dest)
+                {
+                    if (Item* item1 = playerTarget->GetItemByPos(itemPos.pos))
+                        item1->SetBinding(false);
+                }
+            }
+
+            if (sessionPlayer && stackCount && item)
+            {
+                sessionPlayer->SendNewItem(item, stackCount, false, true);
+
+                if (sessionPlayer != playerTarget)
+                    playerTarget->SendNewItem(item, stackCount, true, false);
+            }
+        }
+
+        handler->PSendSysMessage("Added reagents for recipe {} x{} to {}.", spell->Id, count, handler->GetNameLink(playerTarget));
         return true;
     }
 
