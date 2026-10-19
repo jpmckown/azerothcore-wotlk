@@ -24,6 +24,10 @@
 #include "RBAC.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "Trainer.h"
+#include <algorithm>
+#include <array>
+#include <cctype>
 
 using namespace Acore::ChatCommands;
 
@@ -55,16 +59,289 @@ public:
 
         static ChatCommandTable learnCommandTable =
         {
-            { "all",  learnAllCommandTable },
-            { "",     HandleLearnCommand,                      rbac::RBAC_PERM_COMMAND_LEARN, Console::No }
+            { "all",        learnAllCommandTable },
+            { "profession", HandleLearnProfessionCommand,      rbac::RBAC_PERM_COMMAND_LEARN_ALL_RECIPES, Console::No },
+            { "",           HandleLearnCommand,                rbac::RBAC_PERM_COMMAND_LEARN, Console::No }
+        };
+
+        static ChatCommandTable unlearnCommandTable =
+        {
+            { "profession", HandleUnLearnProfessionCommand,    rbac::RBAC_PERM_COMMAND_UNLEARN, Console::No },
+            { "",           HandleUnLearnCommand,              rbac::RBAC_PERM_COMMAND_UNLEARN, Console::No }
         };
 
         static ChatCommandTable commandTable =
         {
             { "learn",   learnCommandTable },
-            { "unlearn", HandleUnLearnCommand,             rbac::RBAC_PERM_COMMAND_UNLEARN, Console::No }
+            { "unlearn", unlearnCommandTable }
         };
         return commandTable;
+    }
+
+    struct ProfessionRank
+    {
+        std::string_view Key;       // as typed in the command, spaces removed
+        std::string_view Name;
+    };
+
+    // In step order; a rank's skill cap is 75 per step (Apprentice 75 ... Grand Master 450)
+    static constexpr std::array<ProfessionRank, 6> ProfessionRanks =
+    { {
+        { "apprentice",  "Apprentice" },
+        { "journeyman",  "Journeyman" },
+        { "expert",      "Expert" },
+        { "artisan",     "Artisan" },
+        { "master",      "Master" },
+        { "grandmaster", "Grand Master" }
+    } };
+
+    // Lower-case ASCII with spaces and underscores dropped, so "First Aid", "first_aid" and "firstaid" compare equal
+    static std::string NormalizeProfessionArg(std::string_view text)
+    {
+        std::string result;
+        result.reserve(text.size());
+        for (char c : text)
+            if (c != ' ' && c != '_')
+                result.push_back(char(std::tolower(static_cast<unsigned char>(c))));
+
+        return result;
+    }
+
+    static char const* GetSkillName(ChatHandler* handler, SkillLineEntry const* skillInfo)
+    {
+        char const* name = skillInfo->name[handler->GetSessionDbcLocale()];
+        return name && *name ? name : skillInfo->name[DEFAULT_LOCALE];
+    }
+
+    static SkillLineEntry const* FindProfessionSkill(ChatHandler* handler, std::string_view name)
+    {
+        if (name.empty())
+            return nullptr;
+
+        for (uint32 i = 1; i < sSkillLineStore.GetNumRows(); ++i)
+        {
+            SkillLineEntry const* skillInfo = sSkillLineStore.LookupEntry(i);
+            if (!skillInfo || (skillInfo->categoryId != SKILL_CATEGORY_PROFESSION && skillInfo->categoryId != SKILL_CATEGORY_SECONDARY))
+                continue;
+
+            for (LocaleConstant locale : { handler->GetSessionDbcLocale(), DEFAULT_LOCALE })
+            {
+                char const* skillName = skillInfo->name[locale];
+                if (skillName && *skillName && NormalizeProfessionArg(skillName) == name)
+                    return skillInfo;
+            }
+        }
+
+        return nullptr;
+    }
+
+    // The skill's rank spells (Apprentice, Journeyman, ...) indexed by step - 1. Only the player rank chain is kept,
+    // leaving out other spells that grant the same skill.
+    static std::vector<uint32> GetProfessionRankSpells(uint32 skillId)
+    {
+        std::vector<uint32> const skillSpells = sSpellMgr->GetSkillRankSpells(skillId); // sorted by step
+
+        uint32 firstRank = 0;
+        for (uint32 spellId : skillSpells)
+        {
+            if (sSpellMgr->GetSpellLearnSkill(spellId)->step == 1 && sSpellMgr->GetNextSpellInChain(spellId))
+            {
+                firstRank = spellId;
+                break;
+            }
+        }
+
+        std::vector<uint32> ranks;
+        for (uint32 spellId : skillSpells)
+        {
+            if (sSpellMgr->GetSpellLearnSkill(spellId)->step != ranks.size() + 1)
+                continue;
+
+            if (firstRank && sSpellMgr->GetFirstSpellInChain(spellId) != firstRank)
+                continue;
+
+            ranks.push_back(spellId);
+        }
+
+        return ranks;
+    }
+
+    // A trainer entry either is the spell itself or a teaching spell that learns it
+    static std::vector<uint32> GetTrainerTaughtSpells(Trainer::Spell const& trainerSpell)
+    {
+        std::vector<uint32> taught;
+        if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(trainerSpell.SpellId))
+            for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+                if (effect.Effect == SPELL_EFFECT_LEARN_SPELL && effect.TriggerSpell)
+                    taught.push_back(effect.TriggerSpell);
+
+        if (taught.empty())
+            taught.push_back(trainerSpell.SpellId);
+
+        return taught;
+    }
+
+    static bool IsSkillLineSpell(uint32 spellId, uint32 skillId)
+    {
+        SkillLineAbilityMapBounds const bounds = sSpellMgr->GetSkillLineAbilityMapBounds(spellId);
+        return std::any_of(bounds.first, bounds.second, [skillId](auto const& itr) { return itr.second->SkillLine == skillId; });
+    }
+
+    // Teaches every trainer recipe of the skill needing at most `cap` skill whose required abilities the player knows,
+    // so specialisation recipes need the specialisation. Rank spells are left to the caller. Repeats until nothing new
+    // is learned, so a recipe requiring another recipe is still taught. Returns the number of spells learned.
+    static uint32 LearnTrainerRecipes(Player* player, uint32 skillId, uint16 cap)
+    {
+        uint32 learned = 0;
+        bool progress = true;
+        while (progress)
+        {
+            progress = false;
+            for (auto const& [trainerId, trainer] : sObjectMgr->GetTrainers())
+            {
+                for (Trainer::Spell const& trainerSpell : trainer.GetSpells())
+                {
+                    if (trainerSpell.ReqSkillLine != skillId || trainerSpell.ReqSkillRank > cap)
+                        continue;
+
+                    if (std::any_of(trainerSpell.ReqAbility.begin(), trainerSpell.ReqAbility.end(),
+                        [player](uint32 ability) { return ability && !player->HasSpell(ability); }))
+                        continue;
+
+                    for (uint32 spellId : GetTrainerTaughtSpells(trainerSpell))
+                    {
+                        if (player->HasSpell(spellId) || sSpellMgr->GetSpellLearnSkill(spellId) ||
+                            !IsSkillLineSpell(spellId, skillId) || !player->IsSpellFitByClassAndRace(spellId))
+                            continue;
+
+                        player->learnSpell(spellId);
+                        if (!player->HasSpell(spellId))
+                            continue;
+
+                        ++learned;
+                        progress = true;
+                    }
+                }
+            }
+        }
+
+        return learned;
+    }
+
+    static bool HandleLearnProfessionCommand(ChatHandler* handler, Tail args)
+    {
+        // Example: .learn profession enchanting artisan
+        std::string name = NormalizeProfessionArg(args);
+
+        // From the highest rank down, so "grandmaster" is matched before "master"
+        uint8 step = 0;
+        for (uint8 i = uint8(ProfessionRanks.size()); i > 0; --i)
+        {
+            std::string_view const key = ProfessionRanks[i - 1].Key;
+            if (name.size() > key.size() && name.ends_with(key))
+            {
+                step = i;
+                name.resize(name.size() - key.size());
+                break;
+            }
+        }
+
+        if (!step)
+        {
+            handler->SendErrorMessage("Syntax: .learn profession $profession $rank (apprentice, journeyman, expert, artisan, master, grand master)");
+            return false;
+        }
+
+        SkillLineEntry const* skillInfo = FindProfessionSkill(handler, name);
+        if (!skillInfo)
+        {
+            handler->SendErrorMessage("Unknown profession '{}'.", name);
+            return false;
+        }
+
+        Player* target = handler->getSelectedPlayerOrSelf();
+        if (!target)
+        {
+            handler->SendErrorMessage(LANG_NO_CHAR_SELECTED);
+            return false;
+        }
+
+        uint32 const skillId = skillInfo->id;
+        char const* skillName = GetSkillName(handler, skillInfo);
+        std::string_view const rankName = ProfessionRanks[step - 1].Name;
+
+        std::vector<uint32> const ranks = GetProfessionRankSpells(skillId);
+        if (ranks.size() < step)
+        {
+            handler->SendErrorMessage("{} has no {} rank.", skillName, rankName);
+            return false;
+        }
+
+        if (target->GetSkillStep(skillId) > step)
+        {
+            handler->SendErrorMessage("{} already has a higher {} rank. Use .unlearn profession first.", handler->GetNameLink(target), skillName);
+            return false;
+        }
+
+        if (IsPrimaryProfessionSkill(skillId) && !target->HasSkill(skillId) && !target->GetFreePrimaryProfessionPoints())
+        {
+            handler->SendErrorMessage("{} has no free primary profession slot.", handler->GetNameLink(target));
+            return false;
+        }
+
+        // Every rank up to the requested one, in order, as trainers teach them: Apprentice takes the profession slot
+        // and each later rank raises the cap. Skipping ranks leaves trainers offering the missing ones, which reset the cap.
+        for (uint8 i = 0; i < step; ++i)
+            if (!target->HasSpell(ranks[i]))
+                target->learnSpell(ranks[i]);
+
+        SpellLearnSkillNode const* rankSkill = sSpellMgr->GetSpellLearnSkill(ranks[step - 1]);
+        uint16 const cap = rankSkill->maxvalue ? rankSkill->maxvalue : target->GetMaxSkillValueForLevel();
+        target->SetSkill(skillId, step, cap, cap);
+
+        uint32 const recipes = LearnTrainerRecipes(target, skillId, cap);
+
+        handler->PSendSysMessage("{} learned {} {} ({}/{}) and {} trainer recipes.", handler->GetNameLink(target), rankName, skillName, cap, cap, recipes);
+        return true;
+    }
+
+    static bool HandleUnLearnProfessionCommand(ChatHandler* handler, Tail args)
+    {
+        // Example: .unlearn profession enchanting
+        SkillLineEntry const* skillInfo = FindProfessionSkill(handler, NormalizeProfessionArg(args));
+        if (!skillInfo)
+        {
+            handler->SendErrorMessage("Syntax: .unlearn profession $profession");
+            return false;
+        }
+
+        Player* target = handler->getSelectedPlayerOrSelf();
+        if (!target)
+        {
+            handler->SendErrorMessage(LANG_NO_CHAR_SELECTED);
+            return false;
+        }
+
+        uint32 const skillId = skillInfo->id;
+        char const* skillName = GetSkillName(handler, skillInfo);
+        if (!target->HasSkill(skillId))
+        {
+            handler->SendErrorMessage("{} doesn't know {}.", handler->GetNameLink(target), skillName);
+            return false;
+        }
+
+        // Removing the lowest known rank removes the higher ranks with it, then the skill and all its recipes, and gives
+        // a primary profession slot back
+        for (uint32 rankSpell : sSpellMgr->GetSkillRankSpells(skillId))
+            if (target->HasSpell(rankSpell))
+                target->removeSpell(rankSpell, SPEC_MASK_ALL, false);
+
+        // A skill given without its rank spells (e.g. by .setskill) still has to go
+        if (target->HasSkill(skillId))
+            target->SetSkill(skillId, 0, 0, 0);
+
+        handler->PSendSysMessage("{} unlearned {} and all its recipes.", handler->GetNameLink(target), skillName);
+        return true;
     }
 
     static bool HandleLearnCommand(ChatHandler* handler, SpellInfo const* spell, Optional<EXACT_SEQUENCE("all")> allRanks)
